@@ -21,37 +21,46 @@ public class VideoController : ControllerBase
 
     // GET: /videos
     [HttpGet(Name = "GetAllOrSearchVideos")]
-    public async Task<ActionResult<IEnumerable<VideoResponseDTO>>> Get([FromQuery] string? search)
+    public async Task<ActionResult<PagedResponseDTO<VideoResponseDTO>>> Get([FromQuery] string? search, [FromQuery] int page = 1)
     {
         try
         {
-            // Check if the search parameter is provided
-            if (string.IsNullOrEmpty(search))
+            var pageSize = 5;
+            var skip = (page - 1) * pageSize;
+
+            IQueryable<Video> query = _context.Videos.Include(v => v.Category);
+            
+            if (!string.IsNullOrEmpty(search))
             {
-                // Return all videos if no search parameter is provided
-                var allVideos = await _context.Videos
-                    .Include(v => v.Category)
-                    .ToListAsync();
-
-                var allVideoDtos = allVideos.Select(_videoMappingService.ConvertToVideoResponseDto).ToList();
-                return Ok(allVideoDtos);
+                query = query.Where(v => v.Title.ToUpper().Contains(search.ToUpper()));
             }
-
-            // Perform search if search parameter is provided
-            var videos = await _context.Videos
-                .Where(v => v.Title.ToUpper().Equals(search.ToUpper()))
-                .Include(v => v.Category)
+            
+            var totalCount = await query.CountAsync();
+            
+            var videos = await query
+                .Skip(skip)
+                .Take(pageSize)
                 .ToListAsync();
 
             if (videos.Count == 0)
             {
-                return NotFound("No videos found matching the specified title.");
+                return NotFound("No videos found.");
             }
 
+            var hasMorePages = (skip + videos.Count) < totalCount;
+            
             var videoDtos = videos.Select(_videoMappingService.ConvertToVideoResponseDto).ToList();
-            return Ok(videoDtos);
+            
+            var response = new PagedResponseDTO<VideoResponseDTO>
+            (
+                CurrentPage : page,
+                HasMorePages : hasMorePages,
+                Items : videoDtos
+            );
+
+            return Ok(response);
         }
-        catch (Exception)
+        catch (Exception ex)
         {
             return Problem("An error occurred while retrieving the videos.");
         }
