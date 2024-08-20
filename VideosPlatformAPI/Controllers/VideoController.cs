@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using VideosPlatformAPI.Data;
 using VideosPlatformAPI.DTO;
 using VideosPlatformAPI.Models;
+using VideosPlatformAPI.Utility;
 
 namespace VideosPlatformAPI.Controllers;
 
@@ -11,41 +12,43 @@ namespace VideosPlatformAPI.Controllers;
 public class VideoController : ControllerBase
 {
     private readonly AppDbContext _context;
-
-    public VideoController(AppDbContext context)
+    private readonly VideoMappingService _videoMappingService;
+    public VideoController(AppDbContext context, VideoMappingService videoMappingService)
     {
         _context = context;
-    }
-
-    // Helper method to convert a Video entity to a VideoResponseDTO
-    private VideoResponseDTO ConvertToVideoResponseDto(Video video)
-    {
-        return new VideoResponseDTO
-        (
-            id: video.Id,
-            Title: video.Title,
-            Description: video.Description,
-            Url: video.Url,
-            Category: new CategoryResponseDTO
-            (
-                Id : video.Category.Id,
-                Title: video.Category.Title,
-                Color: video.Category.Color
-            )
-        );
+        _videoMappingService = videoMappingService;
     }
 
     // GET: /videos
-    [HttpGet(Name = "GetAllVideos")]
-    public async Task<ActionResult<IEnumerable<VideoResponseDTO>>> Get()
+    [HttpGet(Name = "GetAllOrSearchVideos")]
+    public async Task<ActionResult<IEnumerable<VideoResponseDTO>>> Get([FromQuery] string? search)
     {
         try
         {
+            // Check if the search parameter is provided
+            if (string.IsNullOrEmpty(search))
+            {
+                // Return all videos if no search parameter is provided
+                var allVideos = await _context.Videos
+                    .Include(v => v.Category)
+                    .ToListAsync();
+
+                var allVideoDtos = allVideos.Select(_videoMappingService.ConvertToVideoResponseDto).ToList();
+                return Ok(allVideoDtos);
+            }
+
+            // Perform search if search parameter is provided
             var videos = await _context.Videos
-                .Include(v => v.Category)  // Include the Category for each Video
+                .Where(v => v.Title.ToUpper().Equals(search.ToUpper()))
+                .Include(v => v.Category)
                 .ToListAsync();
 
-            var videoDtos = videos.Select(ConvertToVideoResponseDto).ToList();
+            if (videos.Count == 0)
+            {
+                return NotFound("No videos found matching the specified title.");
+            }
+
+            var videoDtos = videos.Select(_videoMappingService.ConvertToVideoResponseDto).ToList();
             return Ok(videoDtos);
         }
         catch (Exception)
@@ -53,6 +56,7 @@ public class VideoController : ControllerBase
             return Problem("An error occurred while retrieving the videos.");
         }
     }
+
 
     // GET: /videos/{id}
     [HttpGet("{id:int}", Name = "GetVideoById")]
@@ -69,14 +73,14 @@ public class VideoController : ControllerBase
                 return NotFound($"Video with Id = {id} not found.");
             }
 
-            return Ok(ConvertToVideoResponseDto(video));
+            return Ok(_videoMappingService.ConvertToVideoResponseDto(video));
         }
         catch (Exception)
         {
             return Problem("An error occurred while retrieving the video.");
         }
     }
-
+    
     // POST: /videos
     [HttpPost(Name = "CreateVideo")]
     public async Task<ActionResult<VideoResponseDTO>> Post([FromBody] VideoDTO videoDto)
@@ -126,7 +130,7 @@ public class VideoController : ControllerBase
             _context.Videos.Add(videoToAdd);
             await _context.SaveChangesAsync();
 
-            var videoResponseDto = ConvertToVideoResponseDto(videoToAdd);
+            var videoResponseDto = _videoMappingService.ConvertToVideoResponseDto(videoToAdd);
 
             return CreatedAtRoute("GetVideoById", new { id = videoResponseDto.id }, videoResponseDto);
         }
@@ -182,7 +186,7 @@ public class VideoController : ControllerBase
                 .Include(v => v.Category)
                 .FirstOrDefaultAsync(v => v.Id == id);
 
-            return Ok(ConvertToVideoResponseDto(updatedVideo));
+            return Ok(_videoMappingService.ConvertToVideoResponseDto(updatedVideo));
         }
         catch (Exception)
         {
@@ -205,7 +209,7 @@ public class VideoController : ControllerBase
                 return NotFound($"Video with Id = {id} not found.");
             }
 
-            var deletedVideoDto = ConvertToVideoResponseDto(videoToDelete);
+            var deletedVideoDto = _videoMappingService.ConvertToVideoResponseDto(videoToDelete);
 
             _context.Videos.Remove(videoToDelete);
             await _context.SaveChangesAsync();

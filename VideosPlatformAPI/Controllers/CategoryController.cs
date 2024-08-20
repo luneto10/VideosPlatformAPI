@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using VideosPlatformAPI.Data;
 using VideosPlatformAPI.DTO;
 using VideosPlatformAPI.Models;
+using VideosPlatformAPI.Utility;
 
 namespace VideosPlatformAPI.Controllers;
 
@@ -11,10 +12,12 @@ namespace VideosPlatformAPI.Controllers;
 public class CategoryController : ControllerBase
 {
     private readonly AppDbContext _context;
+    private readonly VideoMappingService _videoMappingService;
 
-    public CategoryController(AppDbContext context)
+    public CategoryController(AppDbContext context, VideoMappingService videoMappingService)
     {
         _context = context;
+        _videoMappingService = videoMappingService;
     }
 
     // Helper method to convert a Category entity to a CategoryResponseDTO
@@ -35,9 +38,9 @@ public class CategoryController : ControllerBase
         try
         {
             var categories = await _context.Categories.ToListAsync();
-            var categoryDtos = categories.Select(ConvertToCategoryResponseDto).ToList();
+            var categoryDto = categories.Select(ConvertToCategoryResponseDto).ToList();
 
-            return Ok(categoryDtos);
+            return Ok(categoryDto);
         }
         catch (Exception)
         {
@@ -63,6 +66,33 @@ public class CategoryController : ControllerBase
         catch (Exception)
         {
             return Problem("An error occurred while retrieving the category.");
+        }
+    }
+    
+    //GET: /categories/{id}/videos
+    [HttpGet("{id:int}/videos", Name = "GetVideoByCategory")]
+    public async Task<ActionResult<VideoResponseDTO>> GetVideosByCategoryId(int id)
+    {
+        try
+        {
+            var category = await _context.Categories.FindAsync(id);
+            
+            if (category == null)
+            {
+                return NotFound($"Category with Id = {id} not found.");
+            }
+
+            var videos = await _context.Videos
+                .Where(v => v.Category.Id == id)
+                .Include(v => v.Category)
+                .ToListAsync();
+
+            return Ok(videos.Select(_videoMappingService.ConvertToVideoResponseDto).ToList());
+        }
+        catch (Exception e)
+        {
+            Console.WriteLine(e);
+            throw;
         }
     }
 
