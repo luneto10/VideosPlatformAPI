@@ -16,26 +16,28 @@ public class VideoController : ControllerBase
     {
         _context = context;
     }
-    
+
+    // Helper method to convert a Video entity to a VideoResponseDTO
     private VideoResponseDTO ConvertToVideoResponseDto(Video video)
     {
         return new VideoResponseDTO
         (
             id: video.Id,
             Title: video.Title,
-            Description : video.Description,
-            Url : video.Url,
-            Category : new CategoryDTO
+            Description: video.Description,
+            Url: video.Url,
+            Category: new CategoryResponseDTO
             (
-                Title : video.Category.Title,
-                Color : video.Category.Color
+                Id : video.Category.Id,
+                Title: video.Category.Title,
+                Color: video.Category.Color
             )
         );
     }
-    
-    // GET
+
+    // GET: /videos
     [HttpGet(Name = "GetAllVideos")]
-    public async Task<ActionResult<IEnumerable<Video>>> Get()
+    public async Task<ActionResult<IEnumerable<VideoResponseDTO>>> Get()
     {
         try
         {
@@ -43,20 +45,25 @@ public class VideoController : ControllerBase
                 .Include(v => v.Category)  // Include the Category for each Video
                 .ToListAsync();
 
-            return Ok(videos.Select(ConvertToVideoResponseDto).ToList());
+            var videoDtos = videos.Select(ConvertToVideoResponseDto).ToList();
+            return Ok(videoDtos);
         }
-        catch (Exception e)
+        catch (Exception)
         {
-            return Problem("An error Occur");
+            return Problem("An error occurred while retrieving the videos.");
         }
     }
+
+    // GET: /videos/{id}
     [HttpGet("{id:int}", Name = "GetVideoById")]
     public async Task<ActionResult<VideoResponseDTO>> Get(int id)
     {
         try
         {
-            var video = await _context.Videos.FindAsync(id);
-        
+            var video = await _context.Videos
+                .Include(v => v.Category) // Include Category to ensure it's loaded
+                .FirstOrDefaultAsync(v => v.Id == id);
+
             if (video == null)
             {
                 return NotFound($"Video with Id = {id} not found.");
@@ -64,12 +71,13 @@ public class VideoController : ControllerBase
 
             return Ok(ConvertToVideoResponseDto(video));
         }
-        catch (Exception e)
+        catch (Exception)
         {
             return Problem("An error occurred while retrieving the video.");
         }
     }
 
+    // POST: /videos
     [HttpPost(Name = "CreateVideo")]
     public async Task<ActionResult<VideoResponseDTO>> Post([FromBody] VideoDTO videoDto)
     {
@@ -79,8 +87,8 @@ public class VideoController : ControllerBase
             {
                 return BadRequest("Video data is null");
             }
-        
-            Video videoToAdd = new Video
+
+            var videoToAdd = new Video
             {
                 Title = videoDto.Title,
                 Description = videoDto.Description,
@@ -109,27 +117,28 @@ public class VideoController : ControllerBase
 
                 videoToAdd.Category = defaultCategory;
             }
-        
-            // Validate the Video entity only
+
             if (!TryValidateModel(videoToAdd))
             {
                 return BadRequest(ModelState);
             }
-        
+
             _context.Videos.Add(videoToAdd);
             await _context.SaveChangesAsync();
 
-            return CreatedAtRoute("GetVideoById", new { id = videoToAdd.Id }, videoToAdd);
+            var videoResponseDto = ConvertToVideoResponseDto(videoToAdd);
+
+            return CreatedAtRoute("GetVideoById", new { id = videoResponseDto.id }, videoResponseDto);
         }
-        catch (Exception e)
+        catch (Exception)
         {
             return Problem("An error occurred while saving the video.");
         }
     }
 
-    
+    // PUT: /videos/{id}
     [HttpPut("{id:int}", Name = "UpdateVideo")]
-    public async Task<IActionResult> Update(int id, [FromBody] VideoDTO videoDto)
+    public async Task<ActionResult<VideoResponseDTO>> Update(int id, [FromBody] VideoDTO videoDto)
     {
         try
         {
@@ -137,72 +146,74 @@ public class VideoController : ControllerBase
             {
                 return BadRequest("Video data is null");
             }
-            
-            var videoToUpdate = await _context.Videos.FindAsync(id);
-            
+
+            var videoToUpdate = await _context.Videos
+                .Include(v => v.Category) // Ensure category is included for updating
+                .FirstOrDefaultAsync(v => v.Id == id);
+
             if (videoToUpdate == null)
             {
                 return NotFound($"Video with Id = {id} not found.");
             }
-            
-            if (!string.IsNullOrEmpty(videoDto.Title))
+
+            videoToUpdate.Title = !string.IsNullOrEmpty(videoDto.Title) ? videoDto.Title : videoToUpdate.Title;
+            videoToUpdate.Description = !string.IsNullOrEmpty(videoDto.Description) ? videoDto.Description : videoToUpdate.Description;
+            videoToUpdate.Url = !string.IsNullOrEmpty(videoDto.Url) ? videoDto.Url : videoToUpdate.Url;
+
+            if (!string.IsNullOrEmpty(videoDto.CategoryName))
             {
-                videoToUpdate.Title = videoDto.Title;
+                var category = await _context.Categories
+                    .FirstOrDefaultAsync(c => c.Title.ToUpper().Equals(videoDto.CategoryName.ToUpper()));
+
+                if (category != null)
+                {
+                    videoToUpdate.Category = category;
+                }
             }
 
-            if (!string.IsNullOrEmpty(videoDto.Description))
-            {
-                videoToUpdate.Description = videoDto.Description;
-            }
-
-            if (!string.IsNullOrEmpty(videoDto.Url))
-            {
-                videoToUpdate.Url = videoDto.Url;
-            }
-
-            var category =
-                _context.Categories.FirstOrDefault(c => c.Title.ToUpper().Equals(videoDto.CategoryName.ToUpper()));
-            
-            if (category is not null)
-            {
-                videoToUpdate.Category = category;
-            }
-            
             if (!TryValidateModel(videoToUpdate))
             {
                 return BadRequest(ModelState);
             }
-            
+
             await _context.SaveChangesAsync();
 
-            return NoContent();
+            var updatedVideo = await _context.Videos
+                .Include(v => v.Category)
+                .FirstOrDefaultAsync(v => v.Id == id);
+
+            return Ok(ConvertToVideoResponseDto(updatedVideo));
         }
-        catch (Exception e)
+        catch (Exception)
         {
             return Problem("An error occurred while updating the video.");
         }
     }
-    
+
+    // DELETE: /videos/{id}
     [HttpDelete("{id:int}", Name = "DeleteVideo")]
-    public async Task<IActionResult> Delete(int id)
+    public async Task<ActionResult<VideoResponseDTO>> Delete(int id)
     {
         try
         {
-            var videoToDelete = await _context.Videos.FindAsync(id);
+            var videoToDelete = await _context.Videos
+                .Include(v => v.Category) // Ensure category is included for return
+                .FirstOrDefaultAsync(v => v.Id == id);
 
             if (videoToDelete == null)
             {
                 return NotFound($"Video with Id = {id} not found.");
             }
 
+            var deletedVideoDto = ConvertToVideoResponseDto(videoToDelete);
+
             _context.Videos.Remove(videoToDelete);
             await _context.SaveChangesAsync();
 
-            return NoContent();
+            return Ok(deletedVideoDto);
         }
-        catch (Exception e)
+        catch (Exception)
         {
-            Console.WriteLine(e.ToString());
             return Problem("An error occurred while deleting the video.");
         }
     }
