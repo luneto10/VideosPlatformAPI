@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using VideosPlatformAPI.Data;
+using VideosPlatformAPI.Utility;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -7,6 +8,7 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddDbContext<AppDbContext>(options => options.
     UseNpgsql(builder.Configuration.GetConnectionString("DefaultConnectionString")));
 
+builder.Services.AddScoped<VideoMappingService>();
 
 builder.Services.AddControllers();
 // Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle

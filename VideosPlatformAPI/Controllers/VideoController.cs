@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using VideosPlatformAPI.Data;
 using VideosPlatformAPI.DTO;
 using VideosPlatformAPI.Models;
+using VideosPlatformAPI.Utility;
 
 namespace VideosPlatformAPI.Controllers;
 
@@ -11,65 +12,85 @@ namespace VideosPlatformAPI.Controllers;
 public class VideoController : ControllerBase
 {
     private readonly AppDbContext _context;
-
-    public VideoController(AppDbContext context)
+    private readonly VideoMappingService _videoMappingService;
+    public VideoController(AppDbContext context, VideoMappingService videoMappingService)
     {
         _context = context;
+        _videoMappingService = videoMappingService;
     }
-    
-    private VideoResponseDTO ConvertToVideoResponseDto(Video video)
-    {
-        return new VideoResponseDTO
-        (
-            id: video.Id,
-            Title: video.Title,
-            Description : video.Description,
-            Url : video.Url,
-            Category : new CategoryDTO
-            (
-                Title : video.Category.Title,
-                Color : video.Category.Color
-            )
-        );
-    }
-    
-    // GET
-    [HttpGet(Name = "GetAllVideos")]
-    public async Task<ActionResult<IEnumerable<Video>>> Get()
+
+    // GET: /videos
+    [HttpGet(Name = "GetAllOrSearchVideos")]
+    public async Task<ActionResult<PagedResponseDTO<VideoResponseDTO>>> Get([FromQuery] string? search, [FromQuery] int page = 1)
     {
         try
         {
-            var videos = await _context.Videos
-                .Include(v => v.Category)  // Include the Category for each Video
+            var pageSize = 5;
+            var skip = (page - 1) * pageSize;
+
+            IQueryable<Video> query = _context.Videos.Include(v => v.Category);
+            
+            if (!string.IsNullOrEmpty(search))
+            {
+                query = query.Where(v => v.Title.ToUpper().Contains(search.ToUpper()));
+            }
+            
+            var totalCount = await query.CountAsync();
+            
+            var videos = await query
+                .Skip(skip)
+                .Take(pageSize)
                 .ToListAsync();
 
-            return Ok(videos.Select(ConvertToVideoResponseDto).ToList());
+            if (videos.Count == 0)
+            {
+                return NotFound("No videos found.");
+            }
+
+            var hasMorePages = (skip + videos.Count) < totalCount;
+            
+            var videoDtos = videos.Select(_videoMappingService.ConvertToVideoResponseDto).ToList();
+            
+            var response = new PagedResponseDTO<VideoResponseDTO>
+            (
+                CurrentPage : page,
+                HasMorePages : hasMorePages,
+                Items : videoDtos
+            );
+
+            return Ok(response);
         }
-        catch (Exception e)
+        catch (Exception ex)
         {
-            return Problem("An error Occur");
+            return Problem("An error occurred while retrieving the videos.");
         }
     }
+
+
+    // GET: /videos/{id}
     [HttpGet("{id:int}", Name = "GetVideoById")]
     public async Task<ActionResult<VideoResponseDTO>> Get(int id)
     {
         try
         {
-            var video = await _context.Videos.FindAsync(id);
-        
+            var video = await _context.Videos
+                .Include(v => v.Category) // Include Category to ensure it's loaded
+                .FirstOrDefaultAsync(v => v.Id == id);
+
             if (video == null)
             {
                 return NotFound($"Video with Id = {id} not found.");
             }
 
-            return Ok(ConvertToVideoResponseDto(video));
+            return Ok(_videoMappingService.ConvertToVideoResponseDto(video));
         }
-        catch (Exception e)
+        catch (Exception)
         {
             return Problem("An error occurred while retrieving the video.");
         }
     }
-
+    
+    // POST: /videos
     [HttpPost(Name = "CreateVideo")]
     public async Task<ActionResult<VideoResponseDTO>> Post([FromBody] VideoDTO videoDto)
     {
@@ -79,8 +100,8 @@ public class VideoController : ControllerBase
             {
                 return BadRequest("Video data is null");
             }
-        
-            Video videoToAdd = new Video
+
+            var videoToAdd = new Video
             {
                 Title = videoDto.Title,
                 Description = videoDto.Description,
@@ -109,27 +130,28 @@ public class VideoController : ControllerBase
 
                 videoToAdd.Category = defaultCategory;
             }
-        
-            // Validate the Video entity only
+
             if (!TryValidateModel(videoToAdd))
             {
                 return BadRequest(ModelState);
             }
-        
+
             _context.Videos.Add(videoToAdd);
             await _context.SaveChangesAsync();
 
-            return CreatedAtRoute("GetVideoById", new { id = videoToAdd.Id }, videoToAdd);
+            var videoResponseDto = _videoMappingService.ConvertToVideoResponseDto(videoToAdd);
+
+            return CreatedAtRoute("GetVideoById", new { id = videoResponseDto.id }, videoResponseDto);
         }
-        catch (Exception e)
+        catch (Exception)
         {
             return Problem("An error occurred while saving the video.");
         }
     }
 
-    
+    // PUT: /videos/{id}
     [HttpPut("{id:int}", Name = "UpdateVideo")]
-    public async Task<IActionResult> Update(int id, [FromBody] VideoDTO videoDto)
+    public async Task<ActionResult<VideoResponseDTO>> Update(int id, [FromBody] VideoDTO videoDto)
     {
         try
         {
@@ -137,72 +159,74 @@ public class VideoController : ControllerBase
             {
                 return BadRequest("Video data is null");
             }
-            
-            var videoToUpdate = await _context.Videos.FindAsync(id);
-            
+
+            var videoToUpdate = await _context.Videos
+                .Include(v => v.Category) // Ensure category is included for updating
+                .FirstOrDefaultAsync(v => v.Id == id);
+
             if (videoToUpdate == null)
             {
                 return NotFound($"Video with Id = {id} not found.");
             }
-            
-            if (!string.IsNullOrEmpty(videoDto.Title))
+
+            videoToUpdate.Title = !string.IsNullOrEmpty(videoDto.Title) ? videoDto.Title : videoToUpdate.Title;
+            videoToUpdate.Description = !string.IsNullOrEmpty(videoDto.Description) ? videoDto.Description : videoToUpdate.Description;
+            videoToUpdate.Url = !string.IsNullOrEmpty(videoDto.Url) ? videoDto.Url : videoToUpdate.Url;
+
+            if (!string.IsNullOrEmpty(videoDto.CategoryName))
             {
-                videoToUpdate.Title = videoDto.Title;
+                var category = await _context.Categories
+                    .FirstOrDefaultAsync(c => c.Title.ToUpper().Equals(videoDto.CategoryName.ToUpper()));
+
+                if (category != null)
+                {
+                    videoToUpdate.Category = category;
+                }
             }
 
-            if (!string.IsNullOrEmpty(videoDto.Description))
-            {
-                videoToUpdate.Description = videoDto.Description;
-            }
-
-            if (!string.IsNullOrEmpty(videoDto.Url))
-            {
-                videoToUpdate.Url = videoDto.Url;
-            }
-
-            var category =
-                _context.Categories.FirstOrDefault(c => c.Title.ToUpper().Equals(videoDto.CategoryName.ToUpper()));
-            
-            if (category is not null)
-            {
-                videoToUpdate.Category = category;
-            }
-            
             if (!TryValidateModel(videoToUpdate))
             {
                 return BadRequest(ModelState);
             }
-            
+
             await _context.SaveChangesAsync();
 
-            return NoContent();
+            var updatedVideo = await _context.Videos
+                .Include(v => v.Category)
+                .FirstOrDefaultAsync(v => v.Id == id);
+
+            return Ok(_videoMappingService.ConvertToVideoResponseDto(updatedVideo));
         }
-        catch (Exception e)
+        catch (Exception)
         {
             return Problem("An error occurred while updating the video.");
         }
     }
-    
+
+    // DELETE: /videos/{id}
     [HttpDelete("{id:int}", Name = "DeleteVideo")]
-    public async Task<IActionResult> Delete(int id)
+    public async Task<ActionResult<VideoResponseDTO>> Delete(int id)
     {
         try
         {
-            var videoToDelete = await _context.Videos.FindAsync(id);
+            var videoToDelete = await _context.Videos
+                .Include(v => v.Category) // Ensure category is included for return
+                .FirstOrDefaultAsync(v => v.Id == id);
 
             if (videoToDelete == null)
             {
                 return NotFound($"Video with Id = {id} not found.");
             }
 
+            var deletedVideoDto = _videoMappingService.ConvertToVideoResponseDto(videoToDelete);
+
             _context.Videos.Remove(videoToDelete);
             await _context.SaveChangesAsync();
 
-            return NoContent();
+            return Ok(deletedVideoDto);
         }
-        catch (Exception e)
+        catch (Exception)
         {
-            Console.WriteLine(e.ToString());
             return Problem("An error occurred while deleting the video.");
         }
     }
