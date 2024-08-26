@@ -1,3 +1,4 @@
+using Carter;
 using Microsoft.EntityFrameworkCore;
 using VideosPlatformAPI.Data;
 using VideosPlatformAPI.Utility;
@@ -11,7 +12,8 @@ builder.Services.AddDbContext<AppDbContext>(options => options.
 builder.Services.AddScoped<VideoMappingService>();
 
 builder.Services.AddControllers();
-// Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
+builder.Services.AddCarter();
+
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
@@ -34,6 +36,7 @@ app.UseHttpsRedirection();
 
 app.UseAuthorization();
 
+app.MapCarter();
 app.MapControllers();
 
 app.Run();
